@@ -1,0 +1,27 @@
+//@version=4 strategy(title="UT Bot Strategy", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
+// Inputs - Main Strategy Parameters a = input(1, title="Key Value. 'This changes the sensitivity'") c = input(10, title="ATR Period") h = input(false, title="Signals from Heikin Ashi Candles")
+// Risk Management Inputs useFixedSL = input(true, title="Use Fixed Stop Loss") slPercent = input(1.0, title="Stop Loss (%)", minval=0.1, step=0.1) useFixedTP = input(true, title="Use Fixed Take Profit") tpPercent = input(2.0, title="Take Profit (%)", minval=0.1, step=0.1) useATRSL = input(false, title="Use ATR-based Stop Loss") atrSlMult = input(1.5, title="ATR Stop Loss Multiplier", minval=0.1, step=0.1) useATRTP = input(false, title="Use ATR-based Take Profit") atrTpMult = input(3.0, title="ATR Take Profit Multiplier", minval=0.1, step=0.1)
+// Filter Toggles useEMA = input(false, title="Use EMA Filter") emaPeriod = input(233, title="EMA Period", minval=1) emaFilterLong = input(true, title="EMA Above for Long") emaFilterShort = input(true, title="EMA Below for Short")
+useRSI = input(false, title="Use RSI Filter") rsiPeriod = input(14, title="RSI Period", minval=1) rsiOverbought = input(70, title="RSI Overbought Level", minval=50, maxval=100) rsiOversold = input(30, title="RSI Oversold Level", minval=0, maxval=50)
+useVolatility = input(false, title="Use ATR Volatility Filter") volatilityPeriod = input(14, title="Volatility ATR Period", minval=1) minAtrPercent = input(0.5, title="Minimum ATR (% of Price)", minval=0.01, step=0.01)
+// Core UT Bot Logic xATR = atr(c) nLoss = a * xATR
+src = h ? security(heikinashi(syminfo.tickerid), timeframe.period, close, lookahead=false) : close
+xATRTrailingStop = 0.0 xATRTrailingStop := iff(src > nz(xATRTrailingStop[1], 0) and src[1] > nz(xATRTrailingStop[1], 0), max(nz(xATRTrailingStop[1]), src - nLoss), iff(src < nz(xATRTrailingStop[1], 0) and src[1] < nz(xATRTrailingStop[1], 0), min(nz(xATRTrailingStop[1]), src + nLoss), iff(src > nz(xATRTrailingStop[1], 0), src - nLoss, src + nLoss)))
+pos = 0
+pos := iff(src[1] < nz(xATRTrailingStop[1], 0) and src > nz(xATRTrailingStop[1], 0), 1, iff(src[1] > nz(xATRTrailingStop[1], 0) and src < nz(xATRTrailingStop[1], 0), -1, nz(pos[1], 0)))
+xcolor = pos == -1 ? color.red: pos == 1 ? color.green : color.blue
+ema = ema(src, 1) above = crossover(ema, xATRTrailingStop) below = crossover(xATRTrailingStop, ema)
+// Signal conditions buy = src > xATRTrailingStop and above sell = src < xATRTrailingStop and below
+barbuy = src > xATRTrailingStop barsell = src < xATRTrailingStop
+// Filter calculations emaFilter = ema(src, emaPeriod) rsiValue = rsi(src, rsiPeriod) atrValue = atr(volatilityPeriod) atrPercent = (atrValue / src) * 100
+// Apply filters longCondition = buy if useEMA and emaFilterLong longCondition := longCondition and src > emaFilter if useRSI longCondition := longCondition and rsiValue < rsiOverbought if useVolatility longCondition := longCondition and atrPercent >= minAtrPercent
+shortCondition = sell if useEMA and emaFilterShort shortCondition := shortCondition and src < emaFilter if useRSI shortCondition := shortCondition and rsiValue > rsiOversold if useVolatility shortCondition := shortCondition and atrPercent >= minAtrPercent
+// Calculate stop loss and take profit levels atrStopLoss = atrSlMult * xATR atrTakeProfit = atrTpMult * xATR
+// Variables to store entry price, SL and TP for plotting var float entryPrice = na var float stopLoss = na var float takeProfit = na
+// Execute strategy if longCondition entryPrice := src stopLoss := useATRSL ? src - atrStopLoss : src * (1 - slPercent/100) takeProfit := useATRTP ? src + atrTakeProfit : src * (1 + tpPercent/100) strategy.entry("Long", strategy.long) if useFixedSL or useATRSL strategy.exit("Long Exit", "Long", stop=stopLoss, limit=useFixedTP or useATRTP ? takeProfit : na)
+if shortCondition entryPrice := src stopLoss := useATRSL ? src + atrStopLoss : src * (1 + slPercent/100) takeProfit := useATRTP ? src - atrTakeProfit : src * (1 - tpPercent/100) strategy.entry("Short", strategy.short) if useFixedSL or useATRSL strategy.exit("Short Exit", "Short", stop=stopLoss, limit=useFixedTP or useATRTP ? takeProfit : na)
+// Plotting plotshape(longCondition, title="Buy", text='Buy', style=shape.labelup, location=location.belowbar, color=color.green, textcolor=color.white, transp=0, size=size.tiny) plotshape(shortCondition, title="Sell", text='Sell', style=shape.labeldown, location=location.abovebar, color=color.red, textcolor=color.white, transp=0, size=size.tiny)
+// Plot SL/TP levels when a trade is active plot(strategy.position_size > 0 ? stopLoss : na, title="Long SL", color=color.red, style=plot.style_circles, linewidth=2) plot(strategy.position_size > 0 ? takeProfit : na, title="Long TP", color=color.green, style=plot.style_circles, linewidth=2) plot(strategy.position_size < 0 ? stopLoss : na, title="Short SL", color=color.red, style=plot.style_circles, linewidth=2) plot(strategy.position_size < 0 ? takeProfit : na, title="Short TP", color=color.green, style=plot.style_circles, linewidth=2)
+barcolor(barbuy ? color.green : na) barcolor(barsell ? color.red : na)
+// Plot filters when enabled plot(useEMA ? emaFilter : na, title="EMA Filter", color=color.blue, linewidth=1)
+// Alert conditions alertcondition(longCondition, "UT Long", "UT Long") alertcondition(shortCondition, "UT Short", "UT Short")
